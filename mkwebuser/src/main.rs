@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use structopt::StructOpt;
 
@@ -31,22 +31,45 @@ struct User {
 
 #[derive(Debug)]
 struct UserSpace {
+    name: String,
     path: String,
     size_mb: u64,
+}
+
+#[derive(Debug)]
+struct WebSpaceAccount {
+    user: User,
+    userspace: UserSpace,
 }
 
 fn main() -> Result<(), AppError> {
     // Parse arguments
     let opt: Opt = Opt::from_args();
 
-    // Run commands
-    let user = create_user(&opt)?;
-    let space = create_user_space(&opt, &user)?;
+    // Create web space account
+    let acc = {
+        // Create user
+        let user = create_user(&opt)?;
+
+        // Create user space with quota
+        let userspace = create_user_space(&opt, &user)?;
+
+        // Instantiate data structure
+        WebSpaceAccount { user, userspace }
+    };
+
+    println!(
+        "[SUCCESS] User {{ name: {user} }}; Userspace {{ name: {space}; size: {size} }}",
+        user = acc.user.username,
+        space = acc.userspace.name,
+        size = acc.userspace.size_mb,
+    );
 
     Ok(())
 }
 
 fn create_user(opt: &Opt) -> Result<User, AppError> {
+    // Prepare arguments
     let username = &opt.username;
     let default_home_directory = || "/home".to_string();
     let base_directory = opt
@@ -58,12 +81,18 @@ fn create_user(opt: &Opt) -> Result<User, AppError> {
                 .unwrap_or_else(default_home_directory)
         })
         .unwrap_or_else(default_home_directory);
+
+    // Create user
     invoke_create_user(&opt.username, &base_directory)?;
+
+    // Log
     println!(
         "User created: {user} ({base_dir}/{user})",
         user = username,
         base_dir = base_directory
     );
+
+    // Instantiate data structure
     Ok(User {
         username: username.to_string(),
         home_directory: format!("{}/{}", base_directory, username),
@@ -126,22 +155,35 @@ fn invoke_create_user(username: &str, home_directory: &str) -> Result<(), AppErr
 }
 
 fn create_user_space(opt: &Opt, user: &User) -> Result<UserSpace, AppError> {
-    let path = format!("{home_dir}/space", home_dir = user.home_directory);
-    let space = invoke_create_user_space(&path, opt.quota.unwrap_or(1024_u64))?;
-    println!(
-        "Space created: {filename} {size}M ({path})",
-        filename = Path::new(&space.path)
-            .file_name()
-            .map(|s: &std::ffi::OsStr| s.to_str().unwrap_or("<Unknown>"))
-            .unwrap_or("<Unknown>"),
-        size = space.size_mb,
-        path = space.path,
+    // Prepare arguments
+    let name = "volume";
+    let path = format!(
+        "{home_dir}/{name}",
+        home_dir = user.home_directory,
+        name = name
     );
+    let quota = opt.quota.unwrap_or(1024_u64);
+    // Create user space
+    invoke_create_user_space(&path, quota)?;
+
+    // Log
+    println!("Space created: {size}M ({path})", size = quota, path = path,);
+
+    // Format user space
     invoke_format_user_space(&path)?;
-    Ok(space)
+
+    // Log
+    println!("Space formatted: ext4 ({path})", path = path,);
+
+    // Instantiate data structure
+    Ok(UserSpace {
+        name: name.to_string(),
+        path: path,
+        size_mb: quota,
+    })
 }
 
-fn invoke_create_user_space<P>(path: &P, quota_mb: u64) -> Result<UserSpace, AppError>
+fn invoke_create_user_space<P>(path: &P, quota_mb: u64) -> Result<(), AppError>
 where
     P: AsRef<str>,
 {
@@ -159,10 +201,7 @@ where
             reason: "Unable to get exit status",
         })?;
     if status.success() {
-        Ok(UserSpace {
-            path: path.to_string(),
-            size_mb: quota_mb,
-        })
+        Ok(())
     } else {
         Err(AppError::UserSpaceCreationFailed { reason: "dd error" })
     }
@@ -175,8 +214,8 @@ where
     let path: &str = path.as_ref();
     let mut cmd = Command::new("mkfs.ext4");
     cmd.arg(path);
-    // cmd.stderr(Stdio::null());
-    // cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+    cmd.stdout(Stdio::null());
     let status: ExitStatus = cmd
         .status()
         .map_err(|_| AppError::UserSpaceFormattingFailed {
@@ -185,6 +224,8 @@ where
     if status.success() {
         Ok(())
     } else {
-        Err(AppError::UserSpaceFormattingFailed { reason: "mkfs.ext4 error" })
+        Err(AppError::UserSpaceFormattingFailed {
+            reason: "mkfs.ext4 error",
+        })
     }
 }
