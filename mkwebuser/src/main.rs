@@ -19,6 +19,7 @@ struct Opt {
 enum AppError {
     UserCreationFailed { reason: &'static str },
     UserSpaceCreationFailed { reason: &'static str },
+    UserSpaceFormattingFailed { reason: &'static str },
 }
 
 #[derive(Debug)]
@@ -136,6 +137,7 @@ fn create_user_space(opt: &Opt, user: &User) -> Result<UserSpace, AppError> {
         size = space.size_mb,
         path = space.path,
     );
+    invoke_format_user_space(&path)?;
     Ok(space)
 }
 
@@ -163,5 +165,26 @@ where
         })
     } else {
         Err(AppError::UserSpaceCreationFailed { reason: "dd error" })
+    }
+}
+
+fn invoke_format_user_space<P>(path: &P) -> Result<(), AppError>
+where
+    P: AsRef<str>,
+{
+    let path: &str = path.as_ref();
+    let mut cmd = Command::new("mkfs.ext4");
+    cmd.arg(path);
+    // cmd.stderr(Stdio::null());
+    // cmd.stdout(Stdio::null());
+    let status: ExitStatus = cmd
+        .status()
+        .map_err(|_| AppError::UserSpaceFormattingFailed {
+            reason: "Unable to get exit status",
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(AppError::UserSpaceFormattingFailed { reason: "mkfs.ext4 error" })
     }
 }
